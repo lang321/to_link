@@ -1,0 +1,72 @@
+:root{color-scheme:dark;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;color:#e9eef5;background:#0c111a;font-size:14px}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 75% 0%,#18303b66,transparent 55%);min-height:100vh}header,footer{display:flex;align-items:center;gap:24px;padding:20px 4vw;border-bottom:1px solid #253040}.brand{display:flex;align-items:center;gap:8px;color:#d1fae5;font-size:24px;font-weight:800;text-decoration:none}.brand span{color:#55dbaa}.brand b{color:#eef4fb;font-size:20px;margin-left:4px}.tag,.eyebrow{letter-spacing:2px;color:#8194a9;font-size:11px;font-weight:600}.pill{margin-left:auto;background:#192430;border:1px solid #314151;border-radius:30px;padding:7px 14px;color:#9badbf}.pill.online{background:#123c32;color:#82efc1;border-color:#226c53}main{max-width:1400px;margin:auto;padding:32px 4vw}.login{max-width:680px;margin:8vh auto 10vh}.login h1{font-size:clamp(36px,5vw,62px);line-height:1.2;letter-spacing:-2px;margin:22px 0}.login em{font-style:normal;color:#79dfb7}.login p{color:#9cafc4;line-height:1.8}.login form{margin-top:32px}.loginRow{display:flex;gap:12px;margin:10px 0 16px}.login input{flex:1;min-width:0}.login small{color:#71869e}input,select,textarea{font:inherit;color:inherit;background:#111c29;border:1px solid #344557;border-radius:8px;padding:11px 13px;outline:none}input:focus,textarea:focus,select:focus{border-color:#78dfb7;box-shadow:0 0 0 3px #78dfb712}button{font:inherit;font-weight:600;border:1px solid transparent;background:#79dfb7;color:#092b20;border-radius:8px;padding:10px 16px;cursor:pointer;white-space:nowrap}button:hover{filter:brightness(1.1)}button.secondary{background:#192433;border-color:#354355;color:#cfdae8}button:disabled{opacity:.4;cursor:default}button.active{background:#79dfb7;color:#092b20;border-color:#79dfb7}h1{font-size:30px;margin:6px 0 22px}.heading{display:flex;align-items:center;justify-content:space-between}.actions{display:flex;gap:10px}.toolbar{padding:12px;background:#151e2a;border:1px solid #2d3a4a;border-radius:12px 12px 0 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar label{color:#8e9fb3}.toolbar select{max-width:300px;margin-left:8px}.spacer{flex:1}.desktop{height:clamp(320px,57vh,860px);display:flex;align-items:center;justify-content:center;background:#070a10;border:1px solid #2d3a4a;border-top:0;position:relative;overflow:hidden}.desktop:fullscreen{height:100vh;width:100vw;background:#080b11}.desktop canvas{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;outline:0;cursor:default;touch-action:none}.desktop canvas.controlling{cursor:crosshair}#placeholder{text-align:center;color:#70849c;padding:20px}#placeholder h2{color:#c2cfdf;font-size:20px}.monitor{font-size:58px;color:#3b5b70}.statusbar{display:flex;justify-content:space-between;gap:20px;padding:11px 14px;font-size:12px;color:#92a8bf;background:#141d29;border:1px solid #2d3a4a;border-top:0;border-radius:0 0 12px 12px}.hint{font-size:12px;color:#71869e;line-height:1.8}footer{border-top:1px solid #253040;border-bottom:0;justify-content:space-between;color:#53677e;font-size:11px;letter-spacing:1px}#loginError{color:#ffb6a8}[hidden]{display:none!important}@media(max-width:760px){header{gap:12px}.tag{display:none}.desktop{height:48vh}.loginRow{flex-direction:column}.heading{align-items:flex-start}.toolbar select{max-width:190px}.statusbar{flex-direction:column;gap:5px}}
+
+.deviceIdInput{display:block;width:100%;margin:10px 0 18px;font-size:24px;letter-spacing:4px}.toolbar strong{display:inline-block;color:#d4e5f5;font-size:15px;margin-left:8px;font-weight:600}
+.desktop.expanded{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;z-index:1000;border:0}.expandedViewport{overflow:hidden}.exitFullscreen{position:absolute;top:12px;left:12px;z-index:2}
+
+.desktop video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.desktop canvas.videoOverlay{position:absolute;inset:0;width:100%;height:100%;max-width:none;max-height:none;opacity:0;z-index:1}
+
+.remoteCursor{position:absolute;z-index:2;pointer-events:none;color:#101820;font:24px/1 Arial;text-shadow:1px 1px 1px white,-1px -1px 1px white;transform:translate(-2px,-2px)}
+
+/* REQ-REMOTE-20261109-01: reserve space for the controls, then give the rest to the desktop. */
+header > .actions { display: none; }
+/* REQ-REMOTE-20261109-02: the viewport contains both bars and the desktop in one grid. */
+html:has(#console:not([hidden])) { overflow: hidden; }
+body:has(#console:not([hidden])) {
+  --control-header-height: 40px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+body:has(#console:not([hidden])) > footer { display: none; }
+#console { height: 100%; min-width: 0; min-height: 0; }
+body:has(#console:not([hidden])) header {
+  height: var(--control-header-height);
+  padding: 0 10px;
+  gap: 10px;
+}
+body:has(#console:not([hidden])) header > .actions { display: flex; gap: 6px; }
+body:has(#console:not([hidden])) header button,
+.workspace button, .workspace select { padding: 5px 10px; }
+body:has(#console:not([hidden])) header .pill { padding: 3px 8px; }
+main:has(#console:not([hidden])) { width: 100%; min-width: 0; min-height: 0; max-width: none; margin: 0; padding: 4px 6px; }
+.workspace {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.workspace .toolbar { padding: 5px 8px; gap: 6px; }
+.workspace .desktop:not(.expanded):not(:fullscreen) { height: auto; min-height: 0; }
+.workspace .desktop canvas { width: 100%; height: 100%; }
+.workspace .statusbar { grid-row: 3; padding: 3px 9px; }
+
+
+@media (max-width: 760px) {
+  body:has(#console:not([hidden])) header { padding: 0 5px; gap: 4px; }
+  body:has(#console:not([hidden])) header button { padding: 5px 6px; }
+  .workspace .toolbar label { max-width: 100%; overflow-wrap: anywhere; }
+  
+  
+  .workspace .statusbar { gap: 0; }
+}
+
+.workspace .statusbar > span { min-width: 0; overflow-wrap: anywhere; }
+
+
+/* REQ-REMOTE-20261111-01: inside the desktop so native fullscreen keeps transfer feedback visible. */
+.fileTransfer { position: absolute; z-index: 3; left: 12px; bottom: 12px; width: min(370px, calc(100% - 24px)); padding: 12px 14px; border: 1px solid #354355; border-radius: 10px; background: #151e2af5; box-shadow: 0 4px 20px #0005; font-size: 12px; color: #cfdae8; }
+.transferHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
+.transferHeading strong { font-size: 13px; overflow-wrap: anywhere; }
+.fileTransfer .transferHeading button { padding: 3px 7px; font-size: 12px; }
+.transferFile { margin: 5px 0 9px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #92a8bf; }
+.fileTransfer progress { display: block; width: 100%; height: 6px; border: 0; border-radius: 8px; overflow: hidden; appearance: none; background: #293747; accent-color: #79dfb7; }
+.fileTransfer progress::-webkit-progress-bar { background: #293747; border-radius: 8px; }
+.fileTransfer progress::-webkit-progress-value { background: #79dfb7; border-radius: 8px; }
+.fileTransfer progress::-moz-progress-bar { background: #79dfb7; border-radius: 8px; }
+.transferDetails { display: flex; justify-content: space-between; gap: 12px; margin-top: 7px; font-variant-numeric: tabular-nums; }
+.fileTransfer[data-state="error"], .fileTransfer[data-state="cancelled"] { border-color: #a45f54; }
+.fileTransfer[data-state="error"] .transferHeading, .fileTransfer[data-state="cancelled"] .transferHeading { color: #ffb6a8; }

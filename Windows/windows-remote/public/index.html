@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ToLink · 远程桌面</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><a class="brand" href="/">T<span>↗</span> <b>ToLink</b></a><span class="tag">REMOTE DESKTOP</span><span id="connection" class="pill">未连接</span><div class="actions"><button id="refresh" class="secondary">刷新设备</button><button id="logout" class="secondary">更换设备</button></div></header>
+<main>
+  <section id="login" class="login"><div class="eyebrow">让距离，留在屏幕之外</div><h1>连接你的<br><em>远程桌面。</em></h1><p>输入对方客户端显示的设备 ID 和独立密码，连接远程桌面。</p><form id="loginForm"><label for="remoteId">设备 ID</label><input id="remoteId" class="deviceIdInput" inputmode="numeric" pattern="[0-9]{9}" maxlength="9" autocomplete="off" required placeholder="输入 9 位设备 ID"><label for="password">设备密码</label><div class="loginRow"><input id="password" type="password" autocomplete="current-password" required placeholder="输入该设备的访问密码"><button type="submit">连接设备 ↗</button></div></form><p id="loginError" role="alert"></p><small>测试环境 · 请在受信任的局域网内使用</small></section>
+  <section id="console" aria-label="远程桌面" hidden>
+    <div class="workspace">
+    <div class="toolbar"><label>设备 ID <strong id="deviceName">—</strong></label><button id="connect">连接桌面</button><button id="disconnect" class="secondary" disabled>断开</button><span class="spacer"></span><select id="codec" aria-label="编码模式"><option value="h265">低延迟 H.265</option><option value="h264">兼容 H.264</option><option value="jpeg">JPEG 备用</option></select><button id="wake" class="secondary" disabled title="唤亮远端屏幕，系统密码仍需手动输入">唤醒屏幕</button><button id="control" class="secondary" disabled>启用控制</button><input type="file" id="filePicker" multiple hidden><button id="chooseFiles" class="secondary" disabled title="发送到远端 系统剪贴板">粘贴文件</button><button id="fillWindow" class="secondary">撑满窗口</button><button id="fullscreen" class="secondary">全屏</button></div>
+    <div id="desktop" class="desktop"><div id="placeholder"><span class="monitor">▣</span><h2>连接设备，开始操作</h2><p>画面通过服务器转发，被控设备无需开放入站端口。</p></div><video id="video" autoplay muted playsinline disablepictureinpicture hidden></video><canvas id="screen" tabindex="0" aria-label="远程桌面" hidden></canvas><span id="remoteCursor" class="remoteCursor" aria-hidden="true" hidden>↖</span><section id="fileTransfer" class="fileTransfer" aria-label="文件传输" hidden>
+      <div class="transferHeading"><strong id="transferTitle" role="status">正在准备传输</strong><button id="dismissTransfer" class="secondary" aria-label="关闭传输提示" hidden>关闭</button></div>
+      <div id="transferFile" class="transferFile"></div>
+      <progress id="transferProgress" max="100" value="0" aria-label="文件接收进度"></progress>
+      <div class="transferDetails"><span id="transferBytes">0 B / 0 B</span><span id="transferPercent">0%</span></div>
+    </section><button id="exitFullscreen" class="exitFullscreen secondary" hidden>退出全屏</button></div>
+    <div class="statusbar"><span id="message" role="status">准备就绪</span><span id="metrics">—</span></div>
+    </div>
+  </section>
+</main><footer><span>ToLink / 测试版 0.1</span><span>REQ-REMOTE-20261105-01</span></footer><script src="/geometry.js?v=20261109-touch1"></script><script src="/text-input.js"></script><script src="/app.js?v=20261109-touch1"></script>
+</body></html>
