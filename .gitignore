@@ -1,0 +1,28 @@
+# Local settings and credentials
+/private/
+.idea/
+.vscode/
+.DS_Store
+**/.DS_Store
+**/agent.json
+**/bootstrap.json
+.env
+.env.*
+!.env.example
+
+# Dependencies, builds and diagnostics
+node_modules/
+/dist/
+/output/
+.playwright-cli/
+__pycache__/
+*.py[cod]
+bin/
+obj/
+*.log
+*.exe
+*.dll
+*.pdb
+*.zip
+*.tar.gz
+*.tar.gz.sha256

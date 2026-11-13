@@ -1,0 +1,12 @@
+{
+  "host": "127.0.0.1",
+  "port": 19000,
+  "enrollmentToken": "REPLACE_WITH_A_RANDOM_64_CHARACTER_TOKEN",
+  "stateFile": "../private/devices.json",
+  "maxDevices": 1000,
+  "origins": [
+    "http://localhost:19000",
+    "http://127.0.0.1:19000"
+  ],
+  "secureCookie": false
+}

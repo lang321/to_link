@@ -1,0 +1,8 @@
+{
+  "Server": "ws://127.0.0.1:19000",
+  "EnrollmentToken": "MATCH_THE_RELAY_ENROLLMENT_TOKEN",
+  "AccessPassword": "",
+  "Fps": 6,
+  "MaxWidth": 1280,
+  "Quality": 55
+}

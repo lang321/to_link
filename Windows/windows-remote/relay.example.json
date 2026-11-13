@@ -1,9 +1,0 @@
-{
-  "host": "0.0.0.0",
-  "port": 19000,
-  "enrollmentToken": "REPLACE_WITH_A_RANDOM_64_CHARACTER_TOKEN",
-  "stateFile": "/var/lib/tolink/devices.json",
-  "maxDevices": 1000,
-  "origins": ["http://10.211.55.3:19000", "http://192.168.100.101:19000"],
-  "secureCookie": false
-}

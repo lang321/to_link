@@ -1,9 +1,0 @@
-{
-  "name": "tolink-windows-remote",
-  "version": "0.1.0",
-  "private": true,
-  "description": "REQ-REMOTE-20261105-01 Windows desktop relay",
-  "scripts": { "start": "node server.js", "test": "node --test test/*.test.js" },
-  "engines": { "node": ">=18" },
-  "dependencies": { "ws": "^8.18.3" }
-}
