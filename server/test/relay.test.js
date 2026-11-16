@@ -137,6 +137,57 @@ test('video bursts stay ordered; sustained lag restarts only media and preserves
   a.send(two); await until(()=>v.messages.filter(Buffer.isBuffer).length===7);
   assert.equal(v.readyState,WebSocket.OPEN);
 });
+test('a stalled final MP4 fragment recovers without new frames or a viewer reconnect', async t => {
+  let clock = 1;
+  const f = await fixture(t, { heartbeatMs: 30 }, () => clock);
+  const a = await f.connect('agent', 'a');
+  const v = await f.connect('viewer', 'a', secret, '&recover=1&codec=h265');
+  const send = (ws, message) => ws.send(JSON.stringify(message));
+  const stream = { type: 'stream', format: 'mp4', codec: 'h265', mime: 'video/mp4; codecs="hvc1.1.6.L93.B0"' };
+  send(a, { type: 'hello', name: 'a', width: 800, height: 600 });
+  send(a, stream);
+  a.send(Buffer.alloc(1024));
+  await until(() => v.messages.some(Buffer.isBuffer));
+  clock += 16000;
+  await until(() => v.messages.some(m => m.type === 'videoReset'));
+  send(v, { type: 'videoReady' });
+  await until(() => a.messages.filter(m => m.type === 'viewing' && m.active).length === 2);
+  send(a, stream);
+  a.send(Buffer.alloc(512));
+  await until(() => v.messages.filter(Buffer.isBuffer).length === 2);
+  send(v, { type: 'ack', bytes: 512 });
+  send(v, { type: 'key', vk: 65, down: false });
+  await until(() => a.messages.some(m => m.type === 'key'));
+  // An acknowledged final frame can legitimately remain static indefinitely.
+  send(a, { type: 'agentHeartbeat' });
+  await pause(40);
+  clock += 16000;
+  await pause(90);
+  assert.equal(v.messages.filter(m => m.type === 'videoReset').length, 1);
+  assert.equal(v.readyState, WebSocket.OPEN);
+});
+test('encoder restart with no stream header retries the selected codec on the existing socket', async t => {
+  let clock = 1;
+  const f = await fixture(t, {heartbeatMs: 30}, () => clock);
+  const a = await f.connect('agent','a');
+  const v = await f.connect('viewer','a',secret,'&recover=1&codec=h264');
+  const send = (ws, m) => ws.send(JSON.stringify(m));
+  send(a,{type:'hello',name:'a',width:800,height:600});
+  send(a,{type:'stream',format:'mp4',codec:'h264',mime:'video/mp4; codecs="avc1.420028"'});
+  await until(() => v.messages.some(m => m.type === 'stream'));
+  send(v,{type:'videoFault'});
+  await until(() => v.messages.some(m => m.type === 'videoReset'));
+  send(v,{type:'videoReady'});
+  await until(() => a.messages.filter(m => m.type === 'viewing' && m.active).length === 2);
+  clock += 16000;
+  await until(() => v.messages.filter(m => m.type === 'videoReset' && m.codec === 'h264').length === 2);
+  send(v,{type:'videoReady'});
+  await until(() => a.messages.filter(m => m.type === 'viewing' && m.active && m.codec === 'h264').length === 3);
+  send(a,{type:'stream',format:'mp4',codec:'h264',mime:'video/mp4; codecs="avc1.420028"'});
+  a.send(Buffer.alloc(256));
+  await until(() => v.messages.some(Buffer.isBuffer));
+  assert.equal(v.readyState, WebSocket.OPEN);
+});
 test('cursor movement is isolated by device and does not count as video traffic', async t => {
   const f = await fixture(t), a = await f.connect('agent', 'a'), b = await f.connect('agent', 'b', 'b'.repeat(40)), v = await f.connect('viewer', 'a');
   const cursor = { type: 'cursor', x: .25, y: .75, shape: 'text', visible: true };

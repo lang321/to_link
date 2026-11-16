@@ -15,7 +15,9 @@ let remoteCursor = null, pointerInside = false;
 function updateCursor() {
   const marker = $('remoteCursor');
   marker.hidden = !remoteCursor?.visible || format !== 'mp4' || canvas.hidden || (controlling && pointerInside);
-  canvas.style.cursor = controlling ? (remoteCursor?.shape || 'default') : 'default';
+  // JPEG already includes the Windows pointer in the captured pixels.
+  canvas.style.cursor = controlling && pointerInside && !canvas.hidden
+    ? (format === 'jpeg' ? 'none' : remoteCursor?.shape || 'default') : 'default';
   if (marker.hidden) return;
   const rect = ToLinkGeometry.fittedRect(canvas.getBoundingClientRect(), canvas.width, canvas.height);
   if (!rect) { marker.hidden = true; return; }
@@ -26,14 +28,18 @@ function updateCursor() {
 }
 window.addEventListener('resize', updateCursor);
 document.addEventListener('fullscreenchange', updateCursor);
-canvas.addEventListener('pointerenter', () => { pointerInside = true; updateCursor(); });
+canvas.addEventListener('pointerenter', event => { pointerInside = !!pointerPoint(event)?.inside; updateCursor(); });
 canvas.addEventListener('pointerleave', () => { pointerInside = false; updateCursor(); });
 let mediaSource = null, sourceBuffer = null, mediaURL = null, queue = [], pendingAppend = 0, mediaVersion = 0;
+let frameCallback = null, presentedTime = null, stalledSince = null;
+let restoreCanvasFocus = false;
 function stopVideo() {
+  if (frameCallback !== null) video.cancelVideoFrameCallback(frameCallback);
+  frameCallback = presentedTime = stalledSince = null;
   mediaVersion++; queue = []; pendingAppend = 0; sourceBuffer = null; mediaSource = null;
   video.pause(); video.removeAttribute('src'); video.load(); video.hidden = true;
   if (mediaURL) URL.revokeObjectURL(mediaURL); mediaURL = null;
-  canvas.classList.remove('videoOverlay'); format = 'jpeg'; $('remoteCursor').hidden = true;
+  canvas.classList.remove('videoOverlay'); format = 'jpeg'; updateCursor();
 }
 let decoderFaultSent = false;
 function decoderFault() {
@@ -41,11 +47,38 @@ function decoderFault() {
     decoderFaultSent = true; send({type:'videoFault'});
   }
 }
+function checkPlayback(now) {
+  // MSE can acknowledge appended bytes even when the decoder stops presenting pictures.
+  // A stationary desktop at the end of its buffer is healthy.
+  if (frameCallback === null || document.hidden || video.buffered.length === 0) {
+    stalledSince = null;
+    return;
+  }
+  const end = video.buffered.end(video.buffered.length - 1);
+  const hasUnseenFrames = presentedTime === null || end - presentedTime > 0.25;
+  if (!hasUnseenFrames) stalledSince = null;
+  else if (stalledSince === null) stalledSince = now;
+  else if (now - stalledSince > 8000) decoderFault();
+}
+function showCanvas() {
+  canvas.hidden = false; $('placeholder').hidden = true;
+  if (restoreCanvasFocus && controlling && document.activeElement === document.body) canvas.focus();
+  restoreCanvasFocus = false;
+}
 function startVideo(m) {
   decoderFaultSent = false;
   stopVideo(); format = 'mp4'; actualCodec = m.codec.toUpperCase(); idle = false;
   if (!Media || !Media.isTypeSupported(m.mime)) { decoderFault(); return; }
   const version = mediaVersion, ms = mediaSource = new Media();
+  if (video.requestVideoFrameCallback) {
+    const presented = (_, frame) => {
+      if (version !== mediaVersion) return;
+      if (frame.mediaTime !== presentedTime) stalledSince = null;
+      presentedTime = frame.mediaTime;
+      frameCallback = video.requestVideoFrameCallback(presented);
+    };
+    frameCallback = video.requestVideoFrameCallback(presented);
+  }
   video.onerror = () => { if (version === mediaVersion && video.error) decoderFault(); };
   video.muted = true; video.disableRemotePlayback = true; video.hidden = false; canvas.hidden = true;
   // MSE may deliver metadata before it exposes the decoded dimensions.
@@ -54,7 +87,7 @@ function startVideo(m) {
     const width = video.videoWidth || m.width, height = video.videoHeight || m.height;
     if (![width, height].every(n => Number.isInteger(n) && n > 0 && n <= 32768)) return;
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
-    canvas.classList.add('videoOverlay'); canvas.hidden = false; $('placeholder').hidden = true; updateCursor();
+    canvas.classList.add('videoOverlay'); showCanvas(); updateCursor();
   };
   video.onresize = syncSize;
   video.onloadedmetadata = () => {
@@ -73,7 +106,7 @@ function startVideo(m) {
         // Static capture stops advancing the media timeline; resume at its newest frame on changes.
         if (video.buffered.length) {
           const end = video.buffered.end(video.buffered.length - 1), start = video.buffered.start(0);
-          if (video.currentTime < start || end - video.currentTime > .25) video.currentTime = Math.max(start, end - .07);
+          if (!video.seeking && (video.currentTime < start || end - video.currentTime > .25)) video.currentTime = Math.max(start, end - .07);
           if (video.paused) video.play().catch(() => {});
         }
         pumpVideo();
@@ -194,7 +227,7 @@ async function transferFiles(files) {
   finally { if(uploadJob===job)uploadJob=null; $('chooseFiles').disabled=!controlling || !filePaste || !!uploadJob; }
 }
 function setControl(active) {
-  if (!active) cancelUpload();
+  if (!active) { cancelUpload(); restoreCanvasFocus = false; }
   release(); controlling = active && deviceOnline && socket?.readyState === WebSocket.OPEN;
   $('control').textContent = controlling ? '停止控制' : '启用控制';
   $('control').classList.toggle('active', controlling);
@@ -240,7 +273,7 @@ function connect(id) {
         URL.revokeObjectURL(url);
         if (socket !== ws || !deviceOnline || imageVersion !== mediaVersion) return;
         if (canvas.width !== img.width || canvas.height !== img.height) { canvas.width = img.width; canvas.height = img.height; }
-        ctx.drawImage(img, 0, 0); canvas.hidden = false; $('placeholder').hidden = true;
+        ctx.drawImage(img, 0, 0); showCanvas(); updateCursor();
         frames++; bytes += event.data.byteLength; lastFrame = performance.now(); send({ type: 'ack' });
       };
       img.onerror = () => { URL.revokeObjectURL(url); send({ type: 'ack' }); showMessage('画面解码失败，等待下一帧'); };
@@ -254,6 +287,7 @@ function connect(id) {
       showMessage(deviceOnline ? `${m.device.platform === 'macos' ? 'macOS · ' : ''}${m.device.name} · ${m.device.width} × ${m.device.height} · 已连接` : '设备离线，正在等待重新连接…');
       if (!deviceOnline) { setControl(false); stopVideo(); canvas.hidden = true; $('placeholder').hidden = false; }
     } else if (m.type === 'videoReset') {
+      restoreCanvasFocus ||= controlling && document.activeElement === canvas;
       release(); stopVideo(); canvas.hidden = true; waitingForVideo = true;
       if (m.codec) $('codec').value = m.codec;
       showMessage('正在重新同步画面…');
@@ -385,6 +419,7 @@ canvas.onblur = release; window.addEventListener('blur', release);
 document.addEventListener('visibilitychange', () => { if (document.hidden) release(); else { send({ type: 'heartbeat' }); if (waitingForVideo) send({ type: 'videoReady' }); } });
 window.addEventListener('beforeunload', () => { release(); socket?.close(1000, 'Page unload'); });
 setInterval(() => {
+  checkPlayback(performance.now());
   send({ type: 'heartbeat' });
   if (deviceOnline) send({ type: 'probe', nonce: Date.now() });
   const now = performance.now(), seconds = (now - lastMetric) / 1000;

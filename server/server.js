@@ -166,6 +166,7 @@ function createRelay(config, elapsed = () => performance.now()) {
     const v = c.viewer;
     if (!c.agent || !v || v.recovery !== 'ready' || v.batch) return;
     v.recovery = 'starting';
+    v.restartAt = elapsed();
     send(c.agent, { type: 'viewing', active: true, codec: v.codec });
   }
   function resetVideo(c, reason) {
@@ -307,11 +308,7 @@ function createRelay(config, elapsed = () => performance.now()) {
             }
             if (data.length > 8192) return ws.close(1008,'Invalid control size');
             if (m.type === 'videoFault' && ws.canRecover) {
-              if (!ws.recovery && c.stream?.format === 'mp4') {
-                const now = elapsed();
-                if (ws.lastDecoderFault !== undefined && now - ws.lastDecoderFault < 30000) ws.codec = 'jpeg';
-                ws.lastDecoderFault = now; resetVideo(c, 'decoder error');
-              }
+              if (!ws.recovery && c.stream?.format === 'mp4') resetVideo(c, 'decoder error');
               return;
             }
             if (m.type === 'videoReady') {
@@ -357,6 +354,15 @@ function createRelay(config, elapsed = () => performance.now()) {
       const v = c.viewer;
       if (v && (sessions.get(v.sessionId)?.expiry || 0) <= now) v.close(4001, 'Session expired');
       else if (v && v.framePending && elapsed() - v.framePending > 15000) resetVideo(c, 'JPEG ack timeout');
+      else if (v?.recovery === 'starting' && c.agent && elapsed() - v.restartAt > 15000) {
+        // The encoder never announced its replacement stream. Reuse the normal
+        // ready/batch handshake so a running file transfer can finish first.
+        v.recovery = null;
+        resetVideo(c, 'encoder restart timeout');
+      } else if (v && c.stream?.format === 'mp4' && v.videoPending > 0 && elapsed() - v.lastVideoAck > 15000) {
+        // A static desktop may never produce another fragment to trigger the backlog check.
+        resetVideo(c, 'video ack timeout');
+      }
     }
     for (const ws of wss.clients) {
       if (ws.role === 'agent') {
