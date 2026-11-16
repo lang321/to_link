@@ -32,10 +32,14 @@ canvas.addEventListener('pointerenter', event => { pointerInside = !!pointerPoin
 canvas.addEventListener('pointerleave', () => { pointerInside = false; updateCursor(); });
 let mediaSource = null, sourceBuffer = null, mediaURL = null, queue = [], pendingAppend = 0, mediaVersion = 0;
 let frameCallback = null, presentedTime = null, stalledSince = null;
+let bufferedEnd = null, newestSampleStart = null, triedTailSeek = false;
+let awaySince = null, lastInteraction = performance.now(), idleCheck = null;
 let restoreCanvasFocus = false;
 function stopVideo() {
   if (frameCallback !== null) video.cancelVideoFrameCallback(frameCallback);
   frameCallback = presentedTime = stalledSince = null;
+  bufferedEnd = newestSampleStart = idleCheck = null;
+  triedTailSeek = false;
   mediaVersion++; queue = []; pendingAppend = 0; sourceBuffer = null; mediaSource = null;
   video.pause(); video.removeAttribute('src'); video.load(); video.hidden = true;
   if (mediaURL) URL.revokeObjectURL(mediaURL); mediaURL = null;
@@ -48,17 +52,27 @@ function decoderFault() {
   }
 }
 function checkPlayback(now) {
-  // MSE can acknowledge appended bytes even when the decoder stops presenting pictures.
-  // A stationary desktop at the end of its buffer is healthy.
-  if (frameCallback === null || document.hidden || video.buffered.length === 0) {
-    stalledSince = null;
+  if (document.hidden || format !== 'mp4' || !deviceOnline || waitingForVideo) return;
+  if (idleCheck && now >= idleCheck.deadline && !uploadJob) {
+    // After a long foreground idle, allow the first input to produce a picture before refreshing.
+    const unchanged = idleCheck.picture === presentedTime && idleCheck.end === bufferedEnd;
+    idleCheck = null;
+    if (unchanged) { decoderFault(); return; }
+  }
+  if (frameCallback === null || newestSampleStart === null || !video.buffered.length) return;
+  if (presentedTime !== null && presentedTime + 0.001 >= newestSampleStart) {
+    stalledSince = null; triedTailSeek = false;
     return;
   }
-  const end = video.buffered.end(video.buffered.length - 1);
-  const hasUnseenFrames = presentedTime === null || end - presentedTime > 0.25;
-  if (!hasUnseenFrames) stalledSince = null;
-  else if (stalledSince === null) stalledSince = now;
-  else if (now - stalledSince > 8000) decoderFault();
+  if (stalledSince === null) stalledSince = now;
+  if (now - stalledSince > 8000) decoderFault();
+  else if (!triedTailSeek && !video.seeking && now - stalledSince > 2000) {
+    // A 1–3 frame burst can leave the player waiting for more data that an idle desktop won't send.
+    triedTailSeek = true;
+    try {
+      video.currentTime = Math.max(video.buffered.start(video.buffered.length - 1), bufferedEnd - 0.001);
+    } catch { decoderFault(); }
+  }
 }
 function showCanvas() {
   canvas.hidden = false; $('placeholder').hidden = true;
@@ -102,7 +116,19 @@ function startVideo(m) {
       const sb = sourceBuffer = ms.addSourceBuffer(m.mime);
       sb.addEventListener('updateend', () => {
         if (version !== mediaVersion) return;
-        if (pendingAppend) { send({ type: 'ack', bytes: pendingAppend }); pendingAppend = 0; }
+        if (pendingAppend) {
+          // Each media fragment carries one frame. Its start is the previous buffer end
+          // (or the start of a new range). This also detects one missing displayed frame.
+          const ranges = sb.buffered;
+          if (ranges.length) {
+            const end = ranges.end(ranges.length - 1);
+            if (bufferedEnd === null || end > bufferedEnd) {
+              newestSampleStart = Math.max(ranges.start(ranges.length - 1), bufferedEnd ?? 0);
+              bufferedEnd = end;
+            }
+          }
+          send({ type: 'ack', bytes: pendingAppend }); pendingAppend = 0;
+        }
         // Static capture stops advancing the media timeline; resume at its newest frame on changes.
         if (video.buffered.length) {
           const end = video.buffered.end(video.buffered.length - 1), start = video.buffered.start(0);
@@ -415,14 +441,40 @@ const keyMap = { Backspace:8,Tab:9,Enter:13,ShiftLeft:160,ShiftRight:161,Control
 function virtualKey(code) { if (/^Key[A-Z]$/.test(code)) return code.charCodeAt(3); if (/^Digit[0-9]$/.test(code)) return code.charCodeAt(5); if (/^Numpad[0-9]$/.test(code)) return 96 + Number(code.slice(6)); if (/^F([1-9]|1[0-2])$/.test(code)) return 111 + Number(code.slice(1)); return keyMap[code]; }
 function keyboard(e, down) { textInput.key(e, down, virtualKey(e.code)); }
 canvas.onkeydown = e => keyboard(e, true); canvas.onkeyup = e => keyboard(e, false);
-canvas.onblur = release; window.addEventListener('blur', release);
-document.addEventListener('visibilitychange', () => { if (document.hidden) release(); else { send({ type: 'heartbeat' }); if (waitingForVideo) send({ type: 'videoReady' }); } });
+function markAway() {
+  if (awaySince === null) awaySince = performance.now();
+  idleCheck = null;
+  release();
+}
+function resumeViewing() {
+  if (document.hidden) return;
+  const now = performance.now(), away = awaySince;
+  awaySince = null; lastInteraction = now;
+  send({ type: 'heartbeat' });
+  if (waitingForVideo) send({ type: 'videoReady' });
+  else if (away !== null && now - away >= 2000 && deviceOnline && format === 'mp4') {
+    if (uploadJob) idleCheck = { deadline:now, picture:presentedTime, end:bufferedEnd };
+    else decoderFault();
+  }
+}
+function noteInteraction() {
+  const now = performance.now();
+  if (now - lastInteraction >= 30000 && now - lastFrame >= 8000 && deviceOnline && format === 'mp4' && !document.hidden) {
+    idleCheck = { deadline:now + 2000, picture:presentedTime, end:bufferedEnd };
+  }
+  lastInteraction = now;
+}
+for (const type of ['pointermove','pointerdown','keydown','wheel']) canvas.addEventListener(type, noteInteraction, {passive:true});
+canvas.onblur = release;
+window.addEventListener('blur', markAway);
+window.addEventListener('focus', resumeViewing);
+document.addEventListener('visibilitychange', () => { if (document.hidden) markAway(); else resumeViewing(); });
 window.addEventListener('beforeunload', () => { release(); socket?.close(1000, 'Page unload'); });
 setInterval(() => {
-  checkPlayback(performance.now());
   send({ type: 'heartbeat' });
   if (deviceOnline) send({ type: 'probe', nonce: Date.now() });
   const now = performance.now(), seconds = (now - lastMetric) / 1000;
+  checkPlayback(now);
   $('metrics').textContent = `${actualCodec} · ${idle ? '画面静止' : (frames / seconds).toFixed(1) + ' FPS'} · ${(bytes * 8 / seconds / 1e6).toFixed(3)} Mbps${controlRtt ? ' · 控制往返 ' + controlRtt + ' ms' : ''}`;
   frames = 0; bytes = 0; lastMetric = now;
 }, 2000);
