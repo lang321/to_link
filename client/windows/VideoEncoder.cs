@@ -15,6 +15,8 @@ namespace ToLink {
         readonly object gate = new object(); Process process;
         readonly AutoResetEvent wake = new AutoResetEvent(false); long activeUntil;
         public void Wake() { Interlocked.Exchange(ref activeUntil, Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2); wake.Set(); }
+        [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint period);
+        [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint period);
         [DllImport("msvcrt.dll", EntryPoint = "memcmp", CallingConvention = CallingConvention.Cdecl)] static extern int CompareMemory(IntPtr a, IntPtr b, UIntPtr count);
         [DllImport("msvcrt.dll", CallingConvention = CallingConvention.Cdecl)] static extern int memcmp(byte[] a, byte[] b, UIntPtr count);
         public static bool EqualPixels(byte[] a, byte[] b) { return a != null && b != null && a.Length == b.Length && memcmp(a, b, (UIntPtr)a.Length) == 0; }
@@ -52,7 +54,8 @@ namespace ToLink {
         public async Task Run(AgentConfig config, string codec, Func<bool> active, Func<object, Task> sendJson, Func<byte[], Task> sendBinary, CancellationToken cancellation) {
             var bounds = SystemInformation.VirtualScreen;
             int width = Math.Min(1920, bounds.Width) & ~1, height = Math.Max(2, (int)((long)bounds.Height * width / bounds.Width)) & ~1;
-            int fps = 20;
+            // Keep the capture cadence and raw-video timestamps in sync; Level 4 covers 1080p30.
+            int fps = (long)((width + 15) / 16) * ((height + 15) / 16) * 30 <= 245760 ? 30 : 20;
             string encoder = codec == "h265" ? "hevc_qsv" : "h264_qsv";
             string mime = codec == "h265" ? "video/mp4; codecs=\"hvc1.1.6.L120.B0\"" : "video/mp4; codecs=\"avc1.42E028\"";
             string args = "-hide_banner -loglevel warning -nostdin -filter_threads 1 -probesize 32 -analyzeduration 0 -f rawvideo -pix_fmt bgr0 -video_size " + width + "x" + height + " -framerate " + fps + " -i pipe:0 -an -vf format=nv12 -c:v " + encoder + " -preset veryfast -global_quality 20 -g 60 -bf 0 -async_depth 1 -low_power 0 -profile:v " + (codec == "h265" ? "main" : "baseline") + " -level:v 40 -tag:v " + (codec == "h265" ? "hvc1" : "avc1") + " -movflags empty_moov+default_base_moof+frag_every_frame -flush_packets 1 -f mp4 pipe:1";
@@ -96,6 +99,7 @@ namespace ToLink {
                 byte[] pixels = new byte[width * height * 4]; var pinned = GCHandle.Alloc(pixels, GCHandleType.Pinned);
                 bool haveFrame = false, idle = false; int settle = 0; var changedAt = Stopwatch.StartNew();
                 var waits = new WaitHandle[] { wake, cancellation.WaitHandle };
+                bool preciseTimer = false;
                 try {
                     while (active() && !cancellation.IsCancellationRequested) {
                         var time = Stopwatch.StartNew();
@@ -117,12 +121,18 @@ namespace ToLink {
                         if (changed || settle > 0) { await input.WriteAsync(pixels, 0, pixels.Length, cancellation); if (!changed) settle--; }
                         bool quiet = settle == 0 && changedAt.ElapsedMilliseconds > 1000 && Stopwatch.GetTimestamp() > Interlocked.Read(ref activeUntil);
                         int interval = quiet ? 200 : 1000 / fps;
-                        // Remote input wakes capture immediately; external changes are checked at 5 Hz while idle.
+                        // Coarse Windows timer ticks add a frame of delay during a drag.
+                        // Release the timer request when the desktop returns to 5 Hz idle sampling.
+                        if (quiet && preciseTimer) { timeEndPeriod(1); preciseTimer = false; }
+                        else if (!quiet && !preciseTimer) preciseTimer = timeBeginPeriod(1) == 0;
                         int delay = Math.Max(1, interval - (int)time.ElapsedMilliseconds);
                         if (quiet) { if (WaitHandle.WaitAny(waits, delay) == 1) break; }
-                        else { wake.Reset(); await Task.Delay(delay, cancellation); }
+                        else if (cancellation.WaitHandle.WaitOne(delay)) break;
                     }
-                } finally { pinned.Free(); }
+                } finally {
+                    if (preciseTimer) timeEndPeriod(1);
+                    pinned.Free();
+                }
             }
         }
         static bool CopyChanged(IntPtr source, GCHandle pinned, byte[] pixels, bool haveFrame) {

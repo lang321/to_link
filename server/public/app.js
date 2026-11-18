@@ -34,14 +34,46 @@ let mediaSource = null, sourceBuffer = null, mediaURL = null, queue = [], pendin
 let frameCallback = null, presentedTime = null, stalledSince = null;
 let bufferedEnd = null, newestSampleStart = null, triedTailSeek = false;
 let awaySince = null, lastInteraction = performance.now(), idleCheck = null;
+let dragPlaybackUntil = 0, heldLeftPointer = null;
+let appendReceivedAt = null, dragBehindSince = null;
+let lastDragSeek = -Infinity, lastDragRestart = -Infinity;
+function holdingRemoteButton() {
+  return heldLeftPointer !== null && controlling && canvas.hasPointerCapture(heldLeftPointer);
+}
+function draggingVideo(now) {
+  return controlling && !document.hidden && now < dragPlaybackUntil;
+}
+function checkDragBacklog(now) {
+  if (format !== 'mp4' || !draggingVideo(now) || waitingForVideo || uploadJob || decoderFaultSent) {
+    dragBehindSince = null;
+    return;
+  }
+  // An unacknowledged append or queued fragment has a real arrival time, even
+  // when MSE stops advancing its media clock. Never splice predictive frames.
+  const oldest = appendReceivedAt ?? queue[0]?.receivedAt;
+  const appendLag = oldest == null ? 0 : now - oldest;
+  const shown = presentedTime ?? video.currentTime;
+  const displayLag = newestSampleStart === null ? 0 : 1000 * (newestSampleStart - shown);
+  if (Math.max(appendLag, displayLag) < 250) {
+    dragBehindSince = null;
+    return;
+  }
+  if (dragBehindSince === null) dragBehindSince = now;
+  if (now - dragBehindSince >= 250 && now - lastDragRestart >= 3000) {
+    lastDragRestart = now;
+    decoderFault();
+  }
+}
 let restoreCanvasFocus = false;
 function stopVideo() {
   if (frameCallback !== null) video.cancelVideoFrameCallback(frameCallback);
   frameCallback = presentedTime = stalledSince = null;
   bufferedEnd = newestSampleStart = idleCheck = null;
   triedTailSeek = false;
+  appendReceivedAt = dragBehindSince = null; lastDragSeek = -Infinity;
   mediaVersion++; queue = []; pendingAppend = 0; sourceBuffer = null; mediaSource = null;
   video.pause(); video.removeAttribute('src'); video.load(); video.hidden = true;
+  video.playbackRate = 1;
   if (mediaURL) URL.revokeObjectURL(mediaURL); mediaURL = null;
   canvas.classList.remove('videoOverlay'); format = 'jpeg'; updateCursor();
 }
@@ -94,7 +126,8 @@ function startVideo(m) {
     frameCallback = video.requestVideoFrameCallback(presented);
   }
   video.onerror = () => { if (version === mediaVersion && video.error) decoderFault(); };
-  video.muted = true; video.disableRemotePlayback = true; video.hidden = false; canvas.hidden = true;
+  video.muted = true; video.disableRemotePlayback = true; video.hidden = false;
+  if (!holdingRemoteButton()) canvas.hidden = true;
   // MSE may deliver metadata before it exposes the decoded dimensions.
   const syncSize = () => {
     if (version !== mediaVersion) return;
@@ -127,12 +160,29 @@ function startVideo(m) {
               bufferedEnd = end;
             }
           }
-          send({ type: 'ack', bytes: pendingAppend }); pendingAppend = 0;
+          send({ type: 'ack', bytes: pendingAppend }); pendingAppend = 0; appendReceivedAt = null;
         }
         // Static capture stops advancing the media timeline; resume at its newest frame on changes.
         if (video.buffered.length) {
           const end = video.buffered.end(video.buffered.length - 1), start = video.buffered.start(0);
-          if (!video.seeking && (video.currentTime < start || end - video.currentTime > .25)) video.currentTime = Math.max(start, end - .07);
+          // Catch up gradually before a larger delay needs a seek through the GOP.
+          const lag = end - video.currentTime;
+          // During a drag the next frame is a response to the pointer. Use a shorter
+          // playback cushion until the final window position has had time to arrive.
+          const now = performance.now();
+          const dragging = draggingVideo(now);
+          const rate = dragging && lag > .055 ? 1.35 : lag > .08 ? 1.1 : 1;
+          if (video.playbackRate !== rate) video.playbackRate = rate;
+          // currentTime can lead the frame actually on screen. Seek to the latest
+          // sample, with enough time between seeks for the decoder to present it.
+          const shown = presentedTime ?? video.currentTime;
+          if (dragging && newestSampleStart !== null && newestSampleStart - shown >= .099 &&
+              !video.seeking && now - lastDragSeek >= 100 && newestSampleStart > video.currentTime) {
+            lastDragSeek = now;
+            video.currentTime = Math.min(end - .001, newestSampleStart + .001);
+          } else if (!video.seeking && (video.currentTime < start || (!dragging && lag > .18))) {
+            video.currentTime = Math.max(start, end - .025);
+          }
           if (video.paused) video.play().catch(() => {});
         }
         pumpVideo();
@@ -144,9 +194,13 @@ function startVideo(m) {
   mediaURL = URL.createObjectURL(ms); video.src = mediaURL;
 }
 function pumpVideo() {
-  if (!sourceBuffer || sourceBuffer.updating || !mediaSource || mediaSource.readyState !== 'open') return;
+  if (!sourceBuffer || pendingAppend || sourceBuffer.updating || !mediaSource || mediaSource.readyState !== 'open') return;
   try {
-    if (queue.length) { const chunk = queue.shift(); pendingAppend = chunk.byteLength; sourceBuffer.appendBuffer(chunk); }
+    if (queue.length) {
+      const {data, receivedAt} = queue.shift();
+      pendingAppend = data.byteLength; appendReceivedAt = receivedAt;
+      sourceBuffer.appendBuffer(data);
+    }
     // MSE removal can extend to the next random-access frame. Keep two full GOPs
     // behind playback so trimming never discards the currently decoded GOP.
     else if (video.currentTime > 10 && sourceBuffer.buffered.length && sourceBuffer.buffered.start(0) < video.currentTime - 8) sourceBuffer.remove(0, video.currentTime - 6);
@@ -155,7 +209,7 @@ function pumpVideo() {
 function send(value) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); }
 let nativePaste = false, filePaste = false, streamingFilePaste = false, uploadJob = null;
 const textInput = ToLinkTextInput.createTextInput({ enabled: () => controlling && deviceOnline && socket?.readyState === WebSocket.OPEN, supportsPaste: () => nativePaste, send, message: showMessage });
-function release() { textInput.release(); }
+function release() { heldLeftPointer = null; dragPlaybackUntil = 0; dragBehindSince = null; textInput.release(); }
 canvas.addEventListener('paste', event => {
   if (!controlling) return;
   if (Array.from(event.clipboardData?.items || []).some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
@@ -292,7 +346,11 @@ function connect(id) {
   ws.onmessage = async event => {
     if (socket !== ws) return;
     if (event.data instanceof ArrayBuffer) {
-      if (format === 'mp4') { queue.push(event.data); frames++; bytes += event.data.byteLength; lastFrame = performance.now(); pumpVideo(); return; }
+      if (format === 'mp4') {
+        lastFrame = performance.now();
+        queue.push({data:event.data, receivedAt:lastFrame}); frames++; bytes += event.data.byteLength;
+        checkDragBacklog(lastFrame); pumpVideo(); return;
+      }
       const imageVersion = mediaVersion;
       const url = URL.createObjectURL(new Blob([event.data], { type: 'image/jpeg' })), img = new Image();
       img.onload = () => {
@@ -314,7 +372,11 @@ function connect(id) {
       if (!deviceOnline) { setControl(false); stopVideo(); canvas.hidden = true; $('placeholder').hidden = false; }
     } else if (m.type === 'videoReset') {
       restoreCanvasFocus ||= controlling && document.activeElement === canvas;
-      release(); stopVideo(); canvas.hidden = true; waitingForVideo = true;
+      // Keep the pointer capture target alive until button-up, even across an encoder restart.
+      const held = holdingRemoteButton();
+      if (held && video.readyState >= 2) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      if (!held) release();
+      stopVideo(); canvas.hidden = !held; waitingForVideo = true;
       if (m.codec) $('codec').value = m.codec;
       showMessage('正在重新同步画面…');
       if (!document.hidden) send({ type: 'videoReady' });
@@ -416,6 +478,7 @@ canvas.onpointerdown = e => {
   const p = pointerPoint(e);
   if (!p?.inside) return;
   pointerInside = true; updateCursor(); e.preventDefault(); canvas.focus(); canvas.setPointerCapture(e.pointerId);
+  if (e.button === 0) heldLeftPointer = e.pointerId;
   send({ type: 'button', button: e.button, down: true, x: p.x, y: p.y });
 };
 canvas.onpointerup = e => {
@@ -425,6 +488,7 @@ canvas.onpointerup = e => {
   // During a resize or decoder reset a captured pointer can outlive its visible frame.
   if (p) send({ type: 'button', button: e.button, down: false, x: p.x, y: p.y });
   else release();
+  if (e.pointerId === heldLeftPointer) heldLeftPointer = null;
   if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
 };
 canvas.onpointermove = e => {
@@ -433,8 +497,13 @@ canvas.onpointermove = e => {
   if (pointerInside !== p.inside) { pointerInside = p.inside; updateCursor(); }
   if (!controlling || performance.now() - lastMove < 25 || (!p.inside && !e.buttons)) return;
   lastMove = performance.now(); send({ type: 'move', x: p.x, y: p.y });
+  if ((e.buttons & 1) && heldLeftPointer === e.pointerId) {
+    dragPlaybackUntil = lastMove + 250;
+    checkDragBacklog(lastMove);
+  }
 };
 canvas.onpointercancel = release;
+canvas.onlostpointercapture = e => { if (e.pointerId === heldLeftPointer) release(); };
 canvas.oncontextmenu = e => e.preventDefault();
 canvas.addEventListener('wheel', e => { if (!controlling) return; e.preventDefault(); send({ type: 'wheel', delta: e.deltaY > 0 ? -120 : 120 }); }, { passive: false });
 const keyMap = { Backspace:8,Tab:9,Enter:13,ShiftLeft:160,ShiftRight:161,ControlLeft:162,ControlRight:163,AltLeft:164,AltRight:165,Pause:19,CapsLock:20,Escape:27,Space:32,PageUp:33,PageDown:34,End:35,Home:36,ArrowLeft:37,ArrowUp:38,ArrowRight:39,ArrowDown:40,Insert:45,Delete:46,MetaLeft:91,MetaRight:92,ContextMenu:93,NumLock:144,ScrollLock:145,Semicolon:186,Equal:187,Comma:188,Minus:189,Period:190,Slash:191,Backquote:192,BracketLeft:219,Backslash:220,BracketRight:221,Quote:222,NumpadMultiply:106,NumpadAdd:107,NumpadSubtract:109,NumpadDecimal:110,NumpadDivide:111,NumpadEnter:13 };
